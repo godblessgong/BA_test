@@ -1,0 +1,545 @@
+---
+title: "BA_TEST"
+author: "공석빈"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+```{r setting, cache=F, warning=FALSE, echo = FALSE, message=FALSE, eval= FALSE}
+#Sys.setlocale("LC_ALL", "English")
+#.libPaths('C:/library')
+
+library(reshape2)
+library(rlang)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(data.table)
+library(DT)
+library(broom)
+library(plotly)
+library(knitr)
+library(tibble)
+library(lubridate)
+library(scales)
+library(stringi)
+library(stringr)
+library(tm)
+library(magrittr)
+library(caret)
+library(mnormt)
+library(psych)
+library(gridExtra)
+library(fmsb)
+library(xts)
+library(quadprog)
+library(zoo)
+library(purrr)
+library(esquisse)
+library(lubridate)
+library(excel.link) 
+library(readr)
+library(colourpicker)
+library(ggExtra)
+library(officer)
+library(rvg)
+library(ggedit)
+library(ggThemeAssist)
+library(ggridges)
+library(naniar)
+library(VIM)
+library(ggpubr)
+
+
+#Sys.setenv(LANG="EN")
+knitr::opts_chunk$set(warning=FALSE, echo=FALSE, message = FALSE)
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
+normalize <- function(x){
+  return( (x-min(x)) / (max(x)-min(x)) )
+}
+
+is.integer64 = function(x) { class(x) == 'integer64' }
+
+```
+
+
+# 1. Original Data Load 
+```{r Data Load, echo=FALSE, eval=FALSE}
+
+## 하차 - 입고 - 진열 - 픽업 - 포장 - 배송 
+
+## data load 
+df<-as.data.frame(fread('originaldata.csv', header=T)) # 541909
+colnames(df)<-c('ivno', 'scode', 'dc', 'qt', 'ivdate', 'up', 'id', 'country')
+#df %>% filter(qt<0) # 10624
+head(df)
+
+```
+
+
+#2. Make a data 
+```{r make a data, echo=FALSE}
+## 데이터 파악 및 정제부터 
+str(df)
+summary(df)
+
+## 데이터 확인 
+sort(unique(df$dc)) 
+
+## ivdate 주문일자 date로 변경 
+df$ivdate_new<-strptime(df$ivdate, format="%m/%d/%Y %H:%M")  
+df$ivday <- as.Date(df$ivdate_new) # 주문일자 생성 
+df$ivyearmonth <- year(df$ivday)*100+month(df$ivday) # 주문월 생성 
+df$ivmonth <- month(df$ivday) # 주문월 생성 
+
+write.csv(df %>% select(ivno, scode, qt, ivday, ivyearmonth, user_id = id, country), 'shipments.csv', row.names = F, quote = F)
+write.csv(df %>% select(scode, dc, up) %>% filter(!str_detect(dc, ',')), 'items.csv', row.names = F, quote = F)
+
+
+### ivno - workerid
+set.seed(20230101)
+#lst<-sample(x=100:200,size=25900,replace=T) #ivno unique count 25900 
+lst<-sample(x=100:407,size=25900,replace=T) #ivno unique count 25900 
+dd<-unique(df$ivno)
+fd<-data.frame(ivno=dd, workerid=lst)
+
+#write.csv(fd, 'workers.csv', row.names = F, quote = F)
+write.csv(fd, 'workers2.csv', row.names = F, quote = F)
+
+## country - delivery_charge(배송비)
+set.seed(20230101)
+lst<-sample(x=5:30,size=38,replace=T) #ivno unique count 25900 
+dd<-unique(df$country)
+fd<-data.frame(id = 1:38, country=dd, deliverycost=lst*0.01)
+
+write.csv(fd, 'delivery_charges.csv', row.names = F, quote = F)
+
+
+## items 중복 제거 
+it<-sqldf('select scode, dc, up 
+           from 
+           (
+             select scode, dc, up, row_number() over (partition by scode order by up desc) rn 
+             from items
+           ) aa 
+          where rn = 1 
+          order by scode ')
+write.csv(it, 'items.csv', row.names = F, quote = F)
+
+### invoice no 
+#df %>% filter(str_detect(ivno, 'C') & qt >=0 ) # invoice no 앞에 C가 붙은 것은 quantity가 모두 음수 
+## C는 취소/환불/교환 등 통칭 취소건으로 예측됨  
+#df %<>% mutate(isc = case_when(str_detect(ivno, 'C') ~ 1, TRUE ~ 0)) # 취소건 주문 변수 별도 생성
+#df %>% group_by(isc) %>% summarise(n=n_distinct(ivno)) # 0 22064 / 1 3836 , 주문의 약 15%가 취소건  
+#
+### Stockcode
+#sort(unique(df$scode)) # 4070
+#df %>% filter(str_detect(scode, '84660')) # scode 뒤 알파벳은 상품 구분
+## 소문자 대문자 통합 필요 - 모두 같은 상품 84510a, 84510A
+## 상품번호는 알파벳 구분 없이 변경 
+## 모두 대문자로 변경 
+#df %<>% mutate(scode_new = toupper(scode)) # 3958
+#
+### dc 
+## 정제 필요  
+## 모두 진행하기는 시간이 부족함 
+## 모두 특수문자 삭제 + 모두 대문자  
+#sort(unique(df$dc)) # 4212
+#df %<>% mutate(dc_new = toupper(str_replace_all(df$dc, '[^[:alnum:][:space:]]', '')))
+#length(unique(df$dc_new)) # 4167
+#
+#
+#view(head(df))
+#
+### 결측치 확인 
+#na_summary<-as.data.frame(naniar::miss_var_summary(df))
+#naniar::gg_miss_var(df, show_pct = TRUE)
+#
+### id null인 데이터 제거 
+#df_m <- df %>% filter(!is.na(id))
+#dim(df) # 541909
+#dim(df_m) # 406829
+#
+
+
+## data load 
+delivery_charges<-as.data.frame(fread('delivery_charges.csv', header=T)) 
+items<-as.data.frame(fread('items.csv', header=T)) # 
+shipments<-as.data.frame(fread('shipments.csv', header=T)) # 
+shipments$ivday <- ymd(shipments$ivday)
+
+workers<-as.data.frame(fread('workers2.csv', header=T)) # ivno 중 C가 앞에 붙은건 취소건임, 하지만 기존 ivno와 연결되진 않음 C + 새로운번호
+
+
+```
+
+#2-1.EDA 
+```{r EDA, echo=FALSE}
+## 기간 
+summary(shipments)
+
+
+str(shipments)
+
+
+sqldf('select * from shipments where qt in (-80995, 80995)') 
+
+sqldf('select * from shipments where user_id is null limit 10') 
+
+```
+
+#3.Question 0. 월별 출고건 수 
+```{r q0, echo=FALSE}
+
+r0<-sqldf(' select ivyearmonth, count(distinct ivno) cnt 
+            from shipments 
+            group by 1
+            order by 1
+          ' )
+
+```
+
+
+#4.Question 1. 월별 매출(취소건 제외) 추이 
+```{r q1, echo=FALSE}
+## 
+r1<-sqldf(' select a.ivyearmonth
+                   , sum(a.qt * b.up) cost  
+            from shipments a 
+            join items b 
+            on a.scode = b.scode
+            group by 1
+            order by a.ivyearmonth
+          ' )
+
+## 취소건 제외 
+r1<-sqldf(' select a.ivyearmonth
+                   , sum(a.qt * b.up) cost  
+            from shipments a 
+            join items b 
+            on a.scode = b.scode
+            where qt >= 0 
+            group by 1
+            order by a.ivyearmonth
+          ' )
+#shipments %>% filter(qt == -80995)
+#ivno scode     qt          ivdate_new      ivday ivyearmonth user_id        country
+#C581484 23843 -80995 2011-12-09 09:27:00 2011-12-09      201112   16446 United Kingdom
+
+#shipments %>% filter(qt == 80995)
+#ivno scode    qt          ivdate_new      ivday ivyearmonth user_id        country
+#581483 23843 80995 2011-12-09 09:15:00 2011-12-09      201112   16446 United Kingdom
+
+
+
+```
+
+
+#5.Question 2. 월별 영업이익(배송비 제외) 추이 
+```{r q2, echo=FALSE}
+
+
+r2<-sqldf(' select f1.ivyearmonth 
+                   ,f1.cost - f2.d_cost as o_profit
+            from  
+            (
+              select a.ivyearmonth
+                     , sum(a.qt * b.up) cost   
+              from shipments a 
+              join items b 
+              on a.scode = b.scode
+              group by 1
+            ) f1 
+            join 
+            (
+              select ivyearmonth, sum(deliverycost) d_cost 
+              from 
+              (
+                select aa.ivyearmonth, aa.ivno, aa.country, bb.deliverycost
+                from 
+                (
+                  select ivyearmonth, ivno, country 
+                  from shipments 
+                  group by 1,2,3 
+                ) aa 
+                join delivery_charges bb 
+                on aa.country = bb.country
+              ) d
+              group by 1
+            ) f2
+            on f1.ivyearmonth = f2.ivyearmonth 
+            order by f1.ivyearmonth
+          ' )
+
+
+
+```
+
+
+#6.Question 3. 월별 parcel per cost 추이 
+```{r q3, echo=FALSE}
+
+
+r3<-sqldf(' select a.ivyearmonth 
+                   , b.d_cost / a.parcel_cnt as ppc 
+            from 
+            (
+              select ivyearmonth, count(distinct ivno) parcel_cnt 
+              from shipments 
+              group by 1
+            ) a 
+            join 
+            (
+              select aa.ivyearmonth, sum(bb.deliverycost) d_cost
+              from 
+              (
+                select ivyearmonth, ivno, country 
+                from shipments 
+                group by 1,2,3 
+              ) aa
+              join delivery_charges bb 
+              on aa.country = bb.country 
+              group by 1
+            ) b 
+            on a.ivyearmonth = b.ivyearmonth
+            order by a.ivyearmonth
+          ' )
+
+```
+
+
+#7.Question 4. 월별 unit per parcel 추이 
+```{r q4, echo=FALSE}
+
+
+r4<-sqldf(' select a.ivyearmonth
+                   , cast(a.ob_unit as real) / b.parcel_cnt as upp 
+            from  
+            (
+              select ivyearmonth, sum(qt) ob_unit 
+              from shipments 
+              group by 1 
+            ) a 
+            join 
+            (
+              select ivyearmonth, count(distinct ivno) parcel_cnt 
+              from shipments 
+              group by 1
+            ) b 
+            on a.ivyearmonth = b.ivyearmonth
+            order by 1
+          ' )
+
+```
+
+
+#8.Question 5. 월별 unit per day 평균/중앙값 추이 
+```{r q5, echo=FALSE}
+
+r5<-sqldf(' select ivyearmonth, avg(ob_unit) avg_ob_unit, median(ob_unit) med_ob_unit 
+            from 
+            (
+              select ivyearmonth, ivday, sum(qt) ob_unit   
+              from shipments 
+              group by 1,2
+            ) aa 
+            group by 1 
+            order by 1
+          ' )
+```
+
+
+#9.Question 6. 근무자별 처리 출고건 수
+```{r q5, echo=FALSE}
+
+r6<-sqldf('
+          select workerid, count(distinct ivno) iv_cnt 
+          from workers 
+          group by 1
+          ')
+
+r6<-sqldf('
+          select case when iv_cnt <= 60 then \'1_60이하\' 
+                      when iv_Cnt <= 70 then \'2_61~70\' 
+                      when iv_cnt <= 80 then \'3_71~80\' 
+                      when iv_Cnt <= 90 then \'4_81~90\' 
+                      when iv_cnt <= 100 then \'5_91~100\' else \'6_100이상\' end as gubun 
+                 , count(distinct workerid) worker_cnt 
+          from  
+          (
+            select workerid, count(distinct ivno) iv_cnt 
+            from workers 
+            group by 1
+          ) kk 
+          group by 1 
+          ;
+          ')
+
+
+```
+
+
+
+
+
+#10.Question 7. 월별 출고건수 별 근무자 수 
+```{r q6, echo=FALSE}
+
+
+r7<-sqldf(' select a.ivyearmonth, b.workerid, count(distinct a.ivno) iv_cnt  
+           from 
+           (
+               select ivyearmonth, ivno 
+               from shipments 
+               group by 1,2
+           ) a 
+           join workers b 
+           on a.ivno = b.ivno
+           group by 1,2
+          ' )
+
+r7<-sqldf(' 
+              select ivyearmonth
+                     , case when iv_cnt <= 3 then \'A_3이하\' 
+                            when iv_Cnt <= 6 then \'B_4~6\' 
+                            when iv_cnt <= 9 then \'C_7~9\' 
+                            when iv_Cnt <= 12 then \'D_10~12\' else \'E_12이상\' end as gubun 
+                     , count(distinct workerid) worker_cnt 
+              from 
+              (
+                 select a.ivyearmonth, b.workerid, count(distinct a.ivno) iv_cnt  
+                 from 
+                 (
+                     select ivyearmonth, ivno 
+                     from shipments 
+                     group by 1,2
+                 ) a 
+                 join workers b 
+                 on a.ivno = b.ivno
+                 group by 1,2
+              ) bb 
+              group by 1,2
+          ' )
+
+fr7 <- inner_join(r7, 
+                  r7 %>% group_by(ivyearmonth) %>% summarise(sm = sum(worker_cnt))) %>% 
+  mutate(per = round(worker_cnt / sm , 2)) 
+
+
+```
+
+
+
+#11.Question 8. 월별 출고건 수/주문고객 수 
+```{r q7, echo=FALSE}
+
+r8<-sqldf(' select a.ivyearmonth, cast(a.cnt as real) / b.user_cnt as per 
+            from 
+            ( select ivyearmonth, count(distinct ivno) cnt from shipments group by 1) a 
+            join 
+            ( select ivyearmonth, count(distinct user_id) user_cnt from shipments group by 1) b 
+            on a.ivyearmonth = b.ivyearmonth
+            order by a.ivyearmonth
+          ' )
+
+## 탈퇴자 제외 
+r8<-sqldf(' select a.ivyearmonth, cast(a.cnt as real) / b.user_cnt as per 
+            from 
+            ( select ivyearmonth, count(distinct ivno) cnt from shipments where user_id is not null group by 1) a 
+            join 
+            ( select ivyearmonth, count(distinct user_id) user_cnt from shipments where user_id is not null group by 1) b 
+            on a.ivyearmonth = b.ivyearmonth
+            order by a.ivyearmonth
+          ' )
+
+```
+
+
+#12.Question 8-1. 월별 전체 대비 탈퇴자 주문 비중
+```{r q7-1, echo=FALSE}
+
+r8_1<-sqldf(' select ivyearmonth, p_cnt, null_p_cnt, cast(null_p_cnt as real)/p_cnt as p_per 
+                     , ob_unit, null_ob_unit, cast(null_ob_unit as real) / ob_unit as ob_per
+              from 
+              (
+                select ivyearmonth 
+                       , count(distinct ivno) p_cnt 
+                       , count(distinct case when user_id is null then ivno end) null_p_cnt
+                       , sum(qt) ob_unit 
+                       , sum(case when user_id is null then qt end) null_ob_unit
+                from shipments 
+                group by 1
+              ) aa 
+              order by ivyearmonth
+          ' )
+
+```
+
+
+#13.Question 9. 월별 나라별 출고량 추이
+```{r q8, echo=FALSE}
+
+r9<-sqldf('  select * 
+             from 
+             (
+               select *, row_number() over (partition by ivyearmonth order by ob_unit desc) rn
+               from 
+               (
+                 select ivyearmonth, country, sum(qt) ob_unit, count(distinct ivno) p_cnt  
+                 from shipments 
+                 group by ivyearmonth, country
+               ) aa 
+             ) aaa 
+             where rn < 6 
+             order by ivyearmonth, rn
+           ' )
+```
+
+
+#14.Question 10. 월별 나라별 탈퇴자 출고량 추이
+```{r q9, echo=FALSE}
+
+r10<-sqldf('  select ivyearmonth, country, p_cnt, null_p_cnt, cast(null_p_cnt as real)/p_cnt as p_per, 
+                    ob_unit, null_ob_unit, cast(null_ob_unit as real)/ob_unit as ob_per
+             from 
+             (
+               select *, row_number() over (partition by ivyearmonth order by null_ob_unit desc) rn
+               from 
+               (
+                 select ivyearmonth, country, count(distinct ivno) p_cnt, 
+                        count(distinct case when user_id is null then ivno end) null_p_cnt,
+                        sum(qt) ob_unit, 
+                        sum(case when user_id is null then qt end) null_ob_unit
+                 from shipments 
+                 group by ivyearmonth, country
+               ) aa 
+             ) aaa 
+             where rn < 6 
+             order by ivyearmonth, rn
+           ' )
+options("scipen"=100)
+#options("scipen"=0)
+```
+
+
+
+#15.Final Question. 위의 지표를 모두 확인가능한 대시보드 구축   
+```{r dashboard, echo=FALSE}
+
+
+g1<-ggplot(delivery_charges) +
+  aes(x = country, y = deliverycost, fill = country) +
+  geom_col() +
+  scale_fill_hue(direction = 1) +
+  theme_minimal()
+
+ggplotly(g1)
+
+```

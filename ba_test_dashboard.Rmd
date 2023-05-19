@@ -1,0 +1,395 @@
+---
+title: "My First Dashboard"
+author: "Your name"
+#date: "`r Sys.Date()`"
+date: "2011-12-10"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    theme: united
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(reshape2)
+library(rlang)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(data.table)
+library(DT)
+library(broom)
+library(plotly)
+library(knitr)
+library(tibble)
+library(lubridate)
+library(scales)
+library(stringi)
+library(stringr)
+library(tm)
+library(magrittr)
+library(caret)
+library(mnormt)
+library(psych)
+library(gridExtra)
+library(fmsb)
+library(xts)
+library(quadprog)
+library(zoo)
+library(purrr)
+library(esquisse)
+library(lubridate)
+library(excel.link) 
+library(readr)
+library(colourpicker)
+library(ggExtra)
+library(officer)
+library(rvg)
+library(ggedit)
+library(ggThemeAssist)
+library(ggridges)
+library(naniar)
+library(VIM)
+library(ggpubr)
+
+
+library(dplyr) 
+library(data.table)
+library(DT)
+library(plotly)
+library(ggplot2)
+library(esquisse)
+library(sqldf)
+library(lubridate)
+
+#https://godblessgong.github.io/BA_test/ba_test_dashboard.html
+
+#Sys.setenv(LANG="EN")
+knitr::opts_chunk$set(warning=FALSE, echo=FALSE, message = FALSE)
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
+normalize <- function(x){
+  return( (x-min(x)) / (max(x)-min(x)) )
+}
+
+is.integer64 = function(x) { class(x) == 'integer64' }
+
+
+## data load 
+delivery_charges<-as.data.frame(fread('delivery_charges.csv', header=T)) 
+items<-as.data.frame(fread('items.csv', header=T)) # 
+shipments<-as.data.frame(fread('shipments.csv', header=T)) # 
+shipments$ivday <- ymd(shipments$ivday)
+workers<-as.data.frame(fread('workers2.csv', header=T))
+ # ivno 중 C가 앞에 붙은건 취소건임, 하지만 기존 ivno와 연결되진 않음 C + 새로운번호
+
+#sqldf('select * from delivery_charges limit 5 ; ')
+
+
+
+```
+
+
+출고현황
+=======================================================================
+
+rows1{.tabset .tabset-fade}
+-----------------------------------------------------------------------
+
+### 월별 출고량 추이
+
+```{r}
+
+## SQL 
+r0<-sqldf(' select ivyearmonth, count(distinct ivno) parcel_cnt
+            from shipments 
+            group by 1
+            order by 1
+          ' )
+
+## 시각화 
+g0<-ggplot(r0, aes(x=as.factor(ivyearmonth), y=parcel_cnt)) + 
+  geom_bar(stat = "identity", width=0.8, fill="darkred") +
+  labs(x="기준년월", y="출고량") + 
+  theme_minimal()
+
+
+#g0<-ggplot(r0) +
+#  aes(x = as.factor(ivyearmonth), y = cnt) +
+#  geom_col(fill = "#4682B4") +
+#  labs(x="기준년월", y="출고량") + 
+#  hrbrthemes::theme_modern_rc()
+
+## 동적 그래프(interactive graph, 마우스 커서에 따라 정보를 알려줌) 
+ggplotly(g0)
+
+```
+
+
+### 일별 출고량 추이
+
+```{r}
+
+## 바꾸기 
+
+## SQL 
+r1<-sqldf(' select ivday, count(distinct ivno) cnt 
+            from shipments
+            where ivyearmonth > 201109
+            group by 1
+            order by 1
+          ' )
+
+## 시각화 
+g1<-ggplot(r1, aes(x=ivday, y=cnt)) + 
+  geom_bar(stat = "identity", width=0.8, fill="darkred") +
+  labs(x="기준일자", y="출고량") + 
+  theme_minimal()
+
+
+#g0<-ggplot(r0) +
+#  aes(x = as.factor(ivyearmonth), y = cnt) +
+#  geom_col(fill = "#4682B4") +
+#  labs(x="기준년월", y="출고량") + 
+#  hrbrthemes::theme_modern_rc()
+
+## 동적 그래프(interactive graph, 마우스 커서에 따라 정보를 알려줌) 
+ggplotly(g1)
+
+```
+
+
+rows2 
+-----------------------------------------------------------------------
+
+### 월별 출고건수 / 주문고객 수
+
+```{r}
+r7<-sqldf(' select a.ivyearmonth, cast(a.cnt as real) / b.user_cnt as per 
+            from 
+            ( select ivyearmonth, count(distinct ivno) cnt from shipments group by 1) a 
+            join 
+            ( select ivyearmonth, count(distinct user_id) user_cnt from shipments group by 1) b 
+            on a.ivyearmonth = b.ivyearmonth
+            order by a.ivyearmonth
+          ' )
+
+r7_1<-sqldf(' select a.ivyearmonth, cast(a.cnt as real) / b.user_cnt as null_ex_per 
+            from 
+            ( select ivyearmonth, count(distinct ivno) cnt from shipments where user_id is not null group by 1) a 
+            join 
+            ( select ivyearmonth, count(distinct user_id) user_cnt from shipments where user_id is not null group by 1) b 
+            on a.ivyearmonth = b.ivyearmonth
+            order by a.ivyearmonth
+          ' )
+
+r7_fin<-inner_join(r7, r7_1, by='ivyearmonth') %>% 
+  rename(PPU = per, PPU_탈퇴자제외 = null_ex_per) %>% 
+  mutate(ivyearmonth= as.factor(ivyearmonth)) %>%
+  gather(key = 'key', value = 'value', PPU:PPU_탈퇴자제외)
+
+g7 <- ggplot(r7_fin) + 
+  aes(x=ivyearmonth, y=value) + 
+  geom_line(aes(group = key, color = key), stat = "identity") + 
+  geom_point(aes(color=key)) + 
+  labs(x="기준년월", y="PPU", color = "") + 
+  scale_color_brewer(direction = 1, labels=c('PPU', 'PPU(탈퇴자제외)')) + 
+  theme_minimal()
+  
+ggplotly(g7)
+
+
+```
+
+
+
+근무자 현황
+=======================================================================
+
+rows1
+-----------------------------------------------------------------------
+
+### 월별 출고건수 별 근무자 수 
+
+```{r}
+
+## SQL 
+r7<-sqldf(' 
+              select ivyearmonth
+                     , case when iv_cnt <= 3 then \'A_3이하\' 
+                            when iv_Cnt <= 6 then \'B_4~6\' 
+                            when iv_cnt <= 9 then \'C_7~9\' 
+                            when iv_Cnt <= 12 then \'D_10~12\' else \'E_12이상\' end as gubun 
+                     , count(distinct workerid) worker_cnt 
+              from 
+              (
+                 select a.ivyearmonth, b.workerid, count(distinct a.ivno) iv_cnt  
+                 from 
+                 (
+                     select ivyearmonth, ivno 
+                     from shipments 
+                     group by 1,2
+                 ) a 
+                 join workers b 
+                 on a.ivno = b.ivno
+                 group by 1,2
+              ) bb 
+              where ivyearmonth < 201112
+              group by 1,2
+          ' )
+
+fr7 <- inner_join(r7, 
+                  r7 %>% group_by(ivyearmonth) %>% summarise(sm = sum(worker_cnt))) %>% 
+  mutate(per = round(worker_cnt / sm , 4)) 
+
+## 시각화 
+gfr7<-ggplot(fr7, aes(x=as.factor(ivyearmonth), y=per, group=gubun, color = gubun)) + 
+  geom_line(stat = "identity", width=0.8, fill="darkred") +
+  geom_point() +
+  labs(x="기준년월", y="근무자 비중") + 
+  theme_minimal()
+
+#g0<-ggplot(r0) +
+#  aes(x = as.factor(ivyearmonth), y = cnt) +
+#  geom_col(fill = "#4682B4") +
+#  labs(x="기준년월", y="출고량") + 
+#  hrbrthemes::theme_modern_rc()
+
+## 동적 그래프(interactive graph, 마우스 커서에 따라 정보를 알려줌) 
+ggplotly(gfr7)
+
+```
+
+
+
+탈퇴자
+=======================================================================
+
+rows1{.tabset .tabset-fade} 
+-----------------------------------------------------------------------
+
+### 월별 전체 대비 탈퇴자 주문 비중 
+
+```{r}
+r2_1<-sqldf(' select ivyearmonth, p_cnt, null_p_cnt, cast(null_p_cnt as real)/p_cnt as p_per 
+                     , ob_unit, null_ob_unit, cast(null_ob_unit as real) / ob_unit as ob_per
+              from 
+              (
+                select ivyearmonth 
+                       , count(distinct ivno) p_cnt 
+                       , count(distinct case when user_id is null then ivno end) null_p_cnt
+                       , sum(qt) ob_unit 
+                       , sum(case when user_id is null then qt end) null_ob_unit
+                from shipments 
+                group by 1
+              ) aa 
+              order by ivyearmonth
+          ' )
+
+r2_1 %>% 
+  datatable(extensions = c('Buttons', 'Scroller'),
+            options = list(scrollY=500, scrollX=500, pageLength = 20, dom = 'Bfrtrip', 
+                           buttons = c('copy', 'csv', 'excel')),
+                           class = 'cell-border stripe', rownames = FALSE,
+            colnames = c("기준년월", "출고건수", "출고건수_탈퇴자", "탈퇴자출고건수비중",
+                         "출고unit", "출고unit_탈퇴자", "탈퇴자출고unit비중"
+                         ))
+
+```
+
+
+### 당월 탈퇴자 주문 리스트  
+
+```{r}
+r2_2<-sqldf(' select * 
+              from shipments 
+              where user_id is null 
+              and ivyearmonth = 201112
+              order by ivno
+          ' )
+
+r2_2 %>% 
+  datatable(extensions = c('Buttons', 'Scroller'),
+            options = list(scrollY=500, scrollX=500, pageLength = 20, dom = 'Bfrtrip', 
+                           buttons = c('copy', 'csv', 'excel')),
+                           class = 'cell-border stripe', rownames = FALSE) 
+
+```
+
+
+국가별 출고량
+=======================================================================
+
+rows1{.tabset .tabset-fade} 
+-----------------------------------------------------------------------
+
+### 월별 나라별 출고량 추이(1~10위까지)  
+
+```{r}
+r3_1<-sqldf('  select * 
+             from 
+             (
+               select *, row_number() over (partition by ivyearmonth order by ob_unit desc) rn
+               from 
+               (
+                 select ivyearmonth, country, sum(qt) ob_unit, count(distinct ivno) p_cnt  
+                 from shipments 
+                 group by ivyearmonth, country
+               ) aa 
+             ) aaa 
+             where rn <= 10
+             order by ivyearmonth, rn
+           ' )
+
+g3_1 <- ggplot(r3_1, aes(x=as.factor(ivyearmonth), y=ob_unit, fill=country)) + 
+  geom_col(color = 'black', alpha = 0.7) +
+  labs(x="기준년월", y="출고량") + 
+  theme_light()
+
+
+ggplotly(g3_1)
+
+
+```
+
+
+### 월별 나라별 출고량 데이터 
+```{r}
+r3_2<-sqldf('  select * 
+             from 
+             (
+               select *, row_number() over (partition by ivyearmonth order by ob_unit desc) rn
+               from 
+               (
+                 select ivyearmonth, country, sum(qt) ob_unit, count(distinct ivno) p_cnt  
+                 from shipments 
+                 group by ivyearmonth, country
+               ) aa 
+             ) aaa 
+             order by ivyearmonth, rn
+           ' )
+
+r3_2 %>% 
+  datatable(extensions = c('Buttons', 'Scroller'),
+            options = list(scrollY=500, scrollX=500, pageLength = 20, dom = 'Bfrtrip', 
+                           buttons = c('copy', 'csv', 'excel')),
+                           class = 'cell-border stripe', rownames = FALSE,
+            colnames = c("기준년월", "나라명", "출고unit", "출고Parcel수","순위"))
+
+```
+
+
+
+그리고...
+=======================================================================
+
+rows1
+-----------------------------------------------------------------------
+
+### 여러분의 공간
+
+```{r}
+
+
+```
