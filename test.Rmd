@@ -1,0 +1,106 @@
+---
+title: "5/22 대시보드"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(dplyr) 
+library(data.table)
+library(DT)
+library(plotly)
+library(ggplot2)
+library(esquisse)
+library(sqldf)
+library(lubridate)  
+
+## data load 
+delivery_charges<-as.data.frame(fread('delivery_charges.csv', header=T)) 
+items<-as.data.frame(fread('items.csv', header=T)) # 
+shipments<-as.data.frame(fread('shipments.csv', header=T)) # 
+shipments$ivday <- ymd(shipments$ivday)
+
+workers<-as.data.frame(fread('workers2.csv', header=T)) # ivno 중 C가 앞에 붙은건 취소건임, 하지만 기존 ivno와 연결되진 않음 C 
+
+```
+
+
+Page1
+=======================================================================
+
+Row1 
+-----------------------------------------------------------------------
+
+### 어제거 
+
+```{r}
+
+```
+
+
+Row2{.tabset .tabset-fade}
+-----------------------------------------------------------------------
+
+### 오늘거 
+
+```{r}
+## SQL 
+r0<-sqldf(' select ivyearmonth, count(distinct ivno) cnt 
+            from shipments 
+            group by 1
+            order by 1 ' )
+
+## 시각화 
+g0<-ggplot(r0) +
+  aes(x = as.factor(ivyearmonth), y = cnt) +
+  geom_col(fill = "#46637A") +
+  labs(
+    x = "기준년월",
+    y = "출고량",
+    title = "월별출고량",
+    subtitle = "1년동안"
+  ) +
+  theme_classic()
+
+ggplotly(g0)
+```
+
+### 내일거 
+
+```{r}
+## SQL 
+r0<-sqldf(' select ivyearmonth, count(distinct ivno) cnt 
+            from shipments 
+            group by 1
+            order by 1 ' )
+
+## 시각화 
+g0<-ggplot(r0, aes(x=as.factor(ivyearmonth), y=cnt)) + 
+  geom_bar(stat = "identity", width=0.2) +
+  labs(x="기준년월", y="출고량") + 
+  theme_minimal()
+
+
+## 동적 그래프(interactive graph, 마우스 커서에 따라 정보를 알려줌) 
+ggplotly(g0)
+```
+
+
+
+
+Page2
+=======================================================================
+
+Row1 
+-----------------------------------------------------------------------
+
+### 두번째거 
+
+```{r}
+
+```
+
+
